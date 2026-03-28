@@ -1,0 +1,184 @@
+{
+  "info": {
+    "name": "service-demo",
+    "description": "Items CRUD API — use this collection for manual verification before promoting to prod.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080",
+      "description": "Change to the target environment URL. Port-forward first: kubectl port-forward -n <env> svc/service-demo 8080:80"
+    },
+    {
+      "key": "item_id",
+      "value": "",
+      "description": "Populated automatically by the Create Item request"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Liveness (healthz)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/healthz"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Body contains ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness (readyz)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/readyz"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Items",
+      "item": [
+        {
+          "name": "List Items",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/items"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Item",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/v1/items",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"test-item\",\n  \"description\": \"Created via Postman\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "const item = pm.response.json();",
+                  "pm.test('Has ID', () => pm.expect(item.id).to.be.a('string'));",
+                  "pm.collectionVariables.set('item_id', item.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Item",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/items/{{item_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Correct ID', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('item_id')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Item",
+          "request": {
+            "method": "PUT",
+            "url": "{{base_url}}/api/v1/items/{{item_id}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"updated-item\",\n  \"description\": \"Updated via Postman\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Name updated', () => pm.expect(pm.response.json().name).to.eql('updated-item'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Item",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/api/v1/items/{{item_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Deleted Item (expect 404)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/v1/items/{{item_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

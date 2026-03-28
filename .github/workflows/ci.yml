@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  lint-sca:
+    name: Lint & SCA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: govulncheck (dependency SCA)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: golangci-lint (static analysis)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Run unit tests
+        run: go test ./internal/... -v -race -coverprofile=coverage.out
+
+      - name: Run integration tests
+        run: go test ./integration/... -v
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  build:
+    name: Build & Scan Image
+    runs-on: ubuntu-latest
+    needs: [lint-sca, test]
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+
+  # These jobs need access to the local kind cluster.
+  # Register a self-hosted runner on your machine with the 'kind' label.
+  # See: https://github.com/teerakarna/gitops-demo#self-hosted-runner-setup
+  deploy-ephemeral:
+    name: Deploy Ephemeral (pr-${{ github.event.pull_request.number }})
+    runs-on: [self-hosted, kind]
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gitops-demo
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Write PR values
+        run: |
+          mkdir -p values/pr
+          cat > values/pr/pr-${{ github.event.pull_request.number }}.yaml <<EOF
+          image:
+            tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          env:
+            ENV_NAME: pr-${{ github.event.pull_request.number }}
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add values/pr/
+          git commit -m "ci: deploy pr-${{ github.event.pull_request.number }} (${{ github.sha }})"
+          git push
+
+      - name: Wait for ArgoCD sync
+        run: |
+          argocd app wait service-demo-pr-${{ github.event.pull_request.number }} \
+            --sync --health --timeout 120 \
+            --server localhost:30080 --insecure --auth-token ${{ secrets.ARGOCD_TOKEN }}
+
+  smoke-test:
+    name: Smoke Tests
+    runs-on: [self-hosted, kind]
+    needs: deploy-ephemeral
+    steps:
+      - name: Run smoke tests against ephemeral env
+        run: |
+          SVC=$(kubectl get svc -n pr-${{ github.event.pull_request.number }} \
+            -l app.kubernetes.io/name=service-demo -o jsonpath='{.items[0].metadata.name}')
+          kubectl port-forward -n pr-${{ github.event.pull_request.number }} \
+            svc/${SVC} 18080:80 &
+          PF_PID=$!
+          sleep 3
+
+          curl -sf http://localhost:18080/healthz || { kill $PF_PID; exit 1; }
+          curl -sf http://localhost:18080/readyz  || { kill $PF_PID; exit 1; }
+
+          # Basic functional check: create an item and retrieve it
+          ID=$(curl -sf -X POST http://localhost:18080/api/v1/items \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"smoke-test-item"}' | jq -r '.id')
+          curl -sf http://localhost:18080/api/v1/items/${ID} | grep -q "smoke-test-item"
+
+          kill $PF_PID
+          echo "Smoke tests passed."

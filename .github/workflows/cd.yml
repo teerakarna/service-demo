@@ -1,0 +1,133 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build Image (main-${{ github.sha }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: main-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL,HIGH
+
+  promote-dev:
+    name: Promote to dev
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gitops-demo
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Update dev values
+        run: |
+          yq -i '.image.tag = "main-${{ github.sha }}"' values/dev/service-demo.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "cd: promote main-${{ github.sha }} to dev"
+          git push
+
+  promote-preprod:
+    name: Promote to preprod
+    runs-on: ubuntu-latest
+    needs: promote-dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/gitops-demo
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Update preprod values
+        run: |
+          yq -i '.image.tag = "main-${{ github.sha }}"' values/preprod/service-demo.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "cd: promote main-${{ github.sha }} to preprod"
+          git push
+
+  preprod-tests:
+    name: Preprod Tests
+    runs-on: [self-hosted, kind]
+    needs: promote-preprod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Wait for ArgoCD sync
+        run: |
+          argocd app wait service-demo-preprod \
+            --sync --health --timeout 180 \
+            --server localhost:30080 --insecure --auth-token ${{ secrets.ARGOCD_TOKEN }}
+
+      - name: Port-forward preprod
+        run: |
+          kubectl port-forward -n preprod svc/service-demo-preprod 18081:80 &
+          echo "PF_PID=$!" >> $GITHUB_ENV
+          sleep 3
+
+      - name: Run integration tests against preprod
+        env:
+          BASE_URL: http://localhost:18081
+        run: go test ./integration/... -v
+
+      - name: Cleanup port-forward
+        if: always()
+        run: kill ${{ env.PF_PID }} || true
+
+      # This check run is what the release workflow inspects before allowing promotion to prod.
+      - name: Post check run
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'CD / Preprod Tests',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion,
+            });
