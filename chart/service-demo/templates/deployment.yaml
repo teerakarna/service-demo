@@ -28,6 +28,11 @@ spec:
           env:
             - name: ENV_NAME
               value: {{ .Values.env.ENV_NAME | quote }}
+            # Service discovery: other services are reachable at
+            # http://{name}.$(SERVICES_NAMESPACE).svc.cluster.local
+            # Ephemeral envs point to 'dev' (prod-parity); preprod and prod use their own namespace.
+            - name: SERVICES_NAMESPACE
+              value: {{ .Values.servicesNamespace | quote }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

@@ -15,6 +15,12 @@ service:
 env:
   ENV_NAME: dev
 
+# Namespace where shared services (other APIs, data) are discoverable.
+# Ephemeral PR environments set this to 'dev' so they borrow stable,
+# production-equivalent dependencies rather than spinning up their own copies.
+# In-cluster: http://{service}.{servicesNamespace}.svc.cluster.local
+servicesNamespace: dev
+
 resources:
   limits:
     cpu: 250m
