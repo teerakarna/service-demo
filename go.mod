@@ -2,6 +2,8 @@ module github.com/teerakarna/service-demo
 
 go 1.26.0
 
+toolchain go1.26.8
+
 require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
