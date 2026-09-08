@@ -1,8 +1,6 @@
 module github.com/teerakarna/service-demo
 
-go 1.23.0
-
-toolchain go1.27.1
+go 1.26.0
 
 require (
 	github.com/gin-gonic/gin v1.10.0
