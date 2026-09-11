@@ -60,6 +60,23 @@ jobs:
       - name: Sign image (keyless)
         run: cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: false
+
+      # Attested (signed) alongside the image, not a bare release asset — the
+      # SBOM and its signature travel together as one verifiable unit.
+      - name: Attest SBOM
+        run: |
+          cosign attest --yes \
+            --predicate sbom.cdx.json \
+            --type cyclonedx \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
   # dev is no longer promoted here. dev tracks releases (same tag as prod),
   # not main snapshots. It is promoted in release.yml alongside prod.
   promote-preprod:

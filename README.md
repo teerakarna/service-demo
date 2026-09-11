@@ -102,7 +102,7 @@ The image uses a multi-stage build: `golang:1.22-alpine` compiles a statically l
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | PR opened / updated | Lint, SCA, unit tests, integration tests, build `pr-{N}-{sha}` image, Trivy scan, deploy ephemeral env `pr-{N}`, smoke tests |
-| `cd.yml` | Merge to main | Build `main-{sha}` image, Trivy scan, cosign sign, promote to preprod, run preprod integration tests, post check run |
+| `cd.yml` | Merge to main | Build `main-{sha}` image, Trivy scan, cosign sign, generate + attest SBOM, promote to preprod, run preprod integration tests, post check run |
 | `release.yml` | Manual (`workflow_dispatch`) | Verify preprod gate, verify image signature, retag `main-{sha}` → `v{X.Y.Z}` (no rebuild), promote prod + dev values atomically, create GitHub Release |
 
 ### Job dependency graph
@@ -156,6 +156,21 @@ cosign verify \
   --certificate-identity-regexp "^https://github.com/teerakarna/service-demo/" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/teerakarna/service-demo:v1.0.0
+```
+
+`cd.yml` also generates a CycloneDX SBOM ([syft](https://github.com/anchore/syft), via
+`anchore/sbom-action`) and attests it to the same digest with `cosign attest` — the SBOM and its
+signature are one verifiable unit, not a separate downloadable file you have to trust on its own.
+
+Pull and check the SBOM attestation yourself:
+
+```bash
+cosign verify-attestation \
+  --type cyclonedx \
+  --certificate-identity-regexp "^https://github.com/teerakarna/service-demo/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/teerakarna/service-demo:v1.0.0 \
+  | jq -r '.payload | @base64d | fromjson | .predicate'
 ```
 
 ---
