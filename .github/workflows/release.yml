@@ -60,7 +60,7 @@ jobs:
         uses: imjasonh/setup-crane@v0.4
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.0
 
       # An unsigned image must not reach prod — full stop. cd.yml signs at build
       # time; this just refuses to promote anything that signature check fails on.

@@ -51,7 +51,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.0
 
       # Keyless signing: identity is the workflow's own OIDC token, verified against
       # Fulcio/Rekor. No stored key to rotate or leak. Signs the digest, so the
