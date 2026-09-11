@@ -102,8 +102,8 @@ The image uses a multi-stage build: `golang:1.22-alpine` compiles a statically l
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `ci.yml` | PR opened / updated | Lint, SCA, unit tests, integration tests, build `pr-{N}-{sha}` image, Trivy scan, deploy ephemeral env `pr-{N}`, smoke tests |
-| `cd.yml` | Merge to main | Build `main-{sha}` image, Trivy scan, promote to preprod, run preprod integration tests, post check run |
-| `release.yml` | Manual (`workflow_dispatch`) | Verify preprod gate, retag `main-{sha}` → `v{X.Y.Z}` (no rebuild), promote prod + dev values atomically, create GitHub Release |
+| `cd.yml` | Merge to main | Build `main-{sha}` image, Trivy scan, cosign sign, promote to preprod, run preprod integration tests, post check run |
+| `release.yml` | Manual (`workflow_dispatch`) | Verify preprod gate, verify image signature, retag `main-{sha}` → `v{X.Y.Z}` (no rebuild), promote prod + dev values atomically, create GitHub Release |
 
 ### Job dependency graph
 
@@ -137,6 +137,26 @@ The retag at release is a pointer operation — `v{X.Y.Z}` and `main-{sha}` poin
 ### The preprod gate
 
 `cd.yml` posts a `CD / Preprod Tests` check run against the merge commit SHA. `release.yml` checks this before proceeding — if preprod tests are not passing, the release is blocked. There is no override.
+
+### Supply chain
+
+Every image `cd.yml` builds is signed with [cosign](https://github.com/sigstore/cosign) using
+keyless signing — the identity is the workflow's own GitHub Actions OIDC token, verified against
+Sigstore's Fulcio (certificate authority) and Rekor (transparency log). No signing key to
+generate, store, or rotate.
+
+The signature is attached to the image digest, so it covers every tag that later points at that
+digest — `release.yml`'s retag from `main-{sha}` to `v{X.Y.Z}` doesn't need to re-sign, but it does
+verify the signature before promoting, and refuses to release an unsigned image.
+
+Verify any published image yourself:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp "^https://github.com/teerakarna/service-demo/" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/teerakarna/service-demo:v1.0.0
+```
 
 ---
 
