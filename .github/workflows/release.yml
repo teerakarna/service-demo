@@ -59,6 +59,18 @@ jobs:
       - name: Install crane
         uses: imjasonh/setup-crane@v0.4
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
+
+      # An unsigned image must not reach prod — full stop. cd.yml signs at build
+      # time; this just refuses to promote anything that signature check fails on.
+      - name: Verify image is signed before promoting
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ needs.preflight.outputs.sha }}
+
       # Retag: no rebuild. The same image digest that passed preprod gets tagged for prod.
       - name: Retag image
         run: |
